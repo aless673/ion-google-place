@@ -1,12 +1,15 @@
 {
   "name": "ion-google-place",
-  "version": "0.0.1",
+  "version": "1.0.2",
   "homepage": "https://github.com/israelidanny/ion-google-place",
   "authors": [
     "Danny Povolotski <dannypovolotski@gmail.com>"
   ],
   "description": "Ionic directive for a location field (using google maps geocoding)",
-  "main": "ion-google-place.js",
+  "main": [
+    "ion-google-place.js",
+    "ion-google-place.css"
+  ],
   "keywords": [
     "ionic",
     "maps",

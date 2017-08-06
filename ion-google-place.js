@@ -2,72 +2,56 @@ angular.module('ion-google-place', [])
     .directive('ionGooglePlace', [
         '$ionicTemplateLoader',
         '$ionicBackdrop',
+        '$ionicPlatform',
         '$q',
         '$timeout',
         '$rootScope',
         '$document',
-        '$cordovaGeolocation',
-        '$ionicPlatform',
-        function($ionicTemplateLoader, $ionicBackdrop, $q, $timeout, $rootScope, $document, $cordovaGeolocation, $ionicPlatform) {
+        function($ionicTemplateLoader, $ionicBackdrop, $ionicPlatform, $q, $timeout, $rootScope, $document) {
             return {
                 require: '?ngModel',
                 restrict: 'E',
-                template: '<input type="text" readonly="readonly" class="ion-google-place" autocomplete="on">',
+                template: '<input type="text" readonly="readonly" class="ion-google-place" autocomplete="off">',
                 replace: true,
                 scope: {
-                    ngModel: '=?'
+                    ngModel: '=?',
+                    geocodeOptions: '=',
+                    currentLocation: '@'
                 },
                 link: function(scope, element, attrs, ngModel) {
-                    ngModel.$formatters.unshift(function (modelValue) {
-                        if (!modelValue) return '';
-                        return modelValue;
-                    });
-
-                    ngModel.$parsers.unshift(function (viewValue) {
-                        return viewValue;
-                    });
-
-                    ngModel.$render = function(){
-                        if(!ngModel.$modelValue && !ngModel.$viewValue){
-                            element.val('');
-                        } else {
-                            if(typeof(ngModel.$modelValue) === 'string') element.val(ngModel.$modelValue);
-                            else element.val(ngModel.$modelValue.description || ngModel.$viewValue.description || '');
-                        }
-                    };
+                    var unbindBackButtonAction;
 
                     scope.locations = [];
-                    var geocoder = new google.maps.places.AutocompleteService();
+                    var geocoder = new google.maps.Geocoder();
                     var searchEventTimeout = undefined;
 
-                    var currentLocation = (attrs.currentLocation && attrs.currentLocation.length) ? JSON.parse(attrs.currentLocation) : false;
-                    var onlyCities = (attrs.onlyCities) ? true : false;
+                    scope.displayCurrentLocation = false;
+                    scope.currentLocation = scope.currentLocation === "true"? true:false;
+                    
+                    if(!!navigator.geolocation && scope.currentLocation){
+                        scope.displayCurrentLocation = true;
+                    }
                     var POPUP_TPL = [
-                        '<div class="ion-google-place-container">',
-                        '<div class="bar bar-header item-input-inset">',
-                        '<label class="item-input-wrapper">',
-                        '<i class="icon ion-ios-search-strong placeholder-icon"></i>',
-                        '<input class="google-place-search" type="search" ng-model="searchQuery" placeholder="Saisissez une adresse ou un lieu">',
-                        '</label>',
-                        '<span class="icon ion-close placeholder-icon" ng-show="searchQuery" ng-click="clearQuery()"></span>',
-                        '<button class="button button-clear">',
-                        'Annuler',
-                        '</button>',
-                        '</div>',
-                        '<ion-content class="has-header has-header" overflow-scroll="true">',
-                        '<div class="backdropRelease" ng-click="cancel()"></div>',
-                        '<ion-list>',
-                        (currentLocation) ? '<ion-item type="item-text-wrap" class="myPositionItem" ng-click="setCurrentLocation()">' : '',
-                        (currentLocation) ? '<i class="icon ion-android-locate"></i> Ma position' : '',
-                        (currentLocation) ? '</ion-item>' : '',
-                        '<ion-item ng-repeat="location in locations" type="item-text-wrap" ng-click="selectLocation(location)">',
-                        '{{location.description}}',
-                        '</ion-item>',
-                        '<ion-item class="powered-by-google">',
-                        'powered by <img src="img/google.png">',
-                        '</ion-item>',
-                        '</ion-list>',
-                        '</ion-content>',
+                        '<div class="ion-google-place-container modal">',
+                            '<div class="bar bar-header item-input-inset">',
+                                '<label class="item-input-wrapper">',
+                                    '<i class="icon ion-ios7-search placeholder-icon"></i>',
+                                    '<input class="google-place-search" type="search" ng-model="searchQuery" placeholder="' + (attrs.searchPlaceholder || 'Enter an address, place or ZIP code') + '">',
+                                '</label>',
+                                '<button class="button button-clear">',
+                                    attrs.labelCancel || 'Cancel',
+                                '</button>',
+                            '</div>',
+                            '<ion-content class="has-header has-header">',
+                                '<ion-list>',
+                                    '<ion-item type="item-text-wrap" ng-click="setCurrentLocation()" ng-if="displayCurrentLocation">',
+                                        'Use current location',
+                                    '</ion-item>',
+                                    '<ion-item ng-repeat="location in locations" type="item-text-wrap" ng-click="selectLocation(location)">',
+                                        '{{location.formatted_address}}',
+                                    '</ion-item>',
+                                '</ion-list>',
+                            '</ion-content>',
                         '</div>'
                     ].join('');
 
@@ -79,115 +63,116 @@ angular.module('ion-google-place', [])
 
                     popupPromise.then(function(el){
                         var searchInputElement = angular.element(el.element.find('input'));
+
                         scope.selectLocation = function(location){
                             ngModel.$setViewValue(location);
                             ngModel.$render();
                             el.element.css('display', 'none');
                             $ionicBackdrop.release();
+
+                            if (unbindBackButtonAction) {
+                                unbindBackButtonAction();
+                                unbindBackButtonAction = null;
+                            }
+                            scope.$emit('ionGooglePlaceSetLocation',location);
                         };
-                        scope.clearQuery = function(){
-                            scope.searchQuery = "";
-                        }
-                        scope.cancel = function(){
-                            scope.searchQuery = '';
-                            $ionicBackdrop.release();
-                            el.element.css('display', 'none');
-                        }
+
                         scope.setCurrentLocation = function(){
                             var location = {
-                                geolocalisation : 1,
-                                description : 'GÃ©olocalisation en cours...',
-                                lat: null,
-                                lon: null,
-                                done: false
+                                formatted_address: 'getting current location...'
                             };
                             ngModel.$setViewValue(location);
                             ngModel.$render();
                             el.element.css('display', 'none');
                             $ionicBackdrop.release();
-                            var posOptions = {
-                                enableHighAccuracy: false,
-                                timeout: 5000,
-                                maximumAge: 60000
-                            };
-                            $ionicPlatform.ready(function() {
-                                $cordovaGeolocation.getCurrentPosition(posOptions).then(function (position) {
-                                    location.lat  = position.coords.latitude;
-                                    location.lon = position.coords.longitude;
-                                    var geocoder = new google.maps.Geocoder;
-                                    geocoder.geocode({'location': {lat : parseFloat(location.lat), lng : parseFloat(location.lon)}}, function(results, status) {
-                                        if (status === google.maps.GeocoderStatus.OK) {
-                                            if (results[0]) {
-                                                location.done = true;
-                                                location.description = results[0].formatted_address;
-                                                ngModel.$setViewValue(location);
-                                                ngModel.$render();
-                                            } else {
-                                                console.log('No results found');
-                                            }
-                                        } else {
-                                            console.log('Geocoder failed due to: ' + status);
-                                        }
-                                    });
-                                }, function(err) {
-                                    location= {
-                                        geolocalisation : -1,
-                                        description : 'Erreur lors de la localisation',
-                                        lat: null,
-                                        lon: null
+                            getLocation()
+                                .then(reverseGeocoding)
+                                .then(function(location){
+                                    ngModel.$setViewValue(location);
+                                    element.attr('value', location.formatted_address);
+                                    ngModel.$render();
+                                    el.element.css('display', 'none');
+                                    $ionicBackdrop.release();
+                                })
+                                .catch(function(error){
+                                    console.log('erreur catch',error);
+                                    //if(error.from == 'getLocation'){
+                                    //    getLocationError(error);
+                                    //} else {
+                                    //    //TODO when error from reverse geocode
+                                    //}
+                                    var location = {
+                                        formatted_address: 'Error in getting current location'
                                     };
                                     ngModel.$setViewValue(location);
                                     ngModel.$render();
+                                    el.element.css('display', 'none');
+                                    $ionicBackdrop.release();
+                                    $timeout(function(){
+                                        ngModel.$setViewValue(null);
+                                        ngModel.$render();
+                                        el.element.css('display', 'none');
+                                        $ionicBackdrop.release();
+                                    }, 2000);
                                 });
-                            });
-                        }
+                        };
 
                         scope.$watch('searchQuery', function(query){
                             if (searchEventTimeout) $timeout.cancel(searchEventTimeout);
                             searchEventTimeout = $timeout(function() {
                                 if(!query) return;
                                 if(query.length < 3);
-                                var types = (onlyCities) ? ['cities'] : ['geocode',  'establishment'];
-                                geocoder.getPlacePredictions(
-                                    {
-                                        input: query || '',
-                                        types: types
-                                    },
-                                    function(results, status) {
-                                        if (status == google.maps.GeocoderStatus.OK) {
-                                            scope.$apply(function(){
-                                                scope.locations = results;
-                                            });
-                                        } else {
-                                            // @TODO: Figure out what to do when the geocoding fails
-                                        }
+
+                                var req = scope.geocodeOptions || {};
+                                req.address = query;
+                                geocoder.geocode(req, function(results, status) {
+                                    if (status == google.maps.GeocoderStatus.OK) {
+                                        scope.$apply(function(){
+                                            scope.locations = results;
+                                        });
+                                    } else {
+                                        // @TODO: Figure out what to do when the geocoding fails
                                     }
-                                )
-                            }, 350);
+                                });
+                            }, 350); // we're throttling the input by 350ms to be nice to google's API
                         });
 
                         var onClick = function(e){
                             e.preventDefault();
                             e.stopPropagation();
+
                             $ionicBackdrop.retain();
+                            unbindBackButtonAction = $ionicPlatform.registerBackButtonAction(closeOnBackButton, 250);
+
                             el.element.css('display', 'block');
                             searchInputElement[0].focus();
-
-                            if(searchInputElement[0].focus() != document.activeElement) {
-                                var checkFocus = setInterval(function () {
-                                    searchInputElement[0].focus();
-                                    if (searchInputElement[0] == document.activeElement) {
-                                        clearInterval(checkFocus);
-                                    }
-                                }, 100);
-                            }
+                            setTimeout(function(){
+                                searchInputElement[0].focus();
+                            },0);
                         };
 
                         var onCancel = function(e){
                             scope.searchQuery = '';
                             $ionicBackdrop.release();
                             el.element.css('display', 'none');
+
+                            if (unbindBackButtonAction){
+                                unbindBackButtonAction();
+                                unbindBackButtonAction = null;
+                            }
                         };
+
+                        closeOnBackButton = function(e){
+                            e.preventDefault();
+
+                            el.element.css('display', 'none');
+                            $ionicBackdrop.release();
+
+                            if (unbindBackButtonAction){
+                                unbindBackButtonAction();
+                                unbindBackButtonAction = null;
+                            }
+                        }
 
                         element.bind('click', onClick);
                         element.bind('touchend', onClick);
@@ -197,6 +182,66 @@ angular.module('ion-google-place', [])
 
                     if(attrs.placeholder){
                         element.attr('placeholder', attrs.placeholder);
+                    }
+
+
+                    ngModel.$formatters.unshift(function (modelValue) {
+                        if (!modelValue) return '';
+                        return modelValue;
+                    });
+
+                    ngModel.$parsers.unshift(function (viewValue) {
+                        return viewValue;
+                    });
+
+                    ngModel.$render = function(){
+                        if(!ngModel.$viewValue){
+                            element.val('');
+                        } else {
+                            element.val(ngModel.$viewValue.formatted_address || '');
+                        }
+                    };
+
+                    scope.$on("$destroy", function(){
+                        if (unbindBackButtonAction){
+                            unbindBackButtonAction();
+                            unbindBackButtonAction = null;
+                        }
+                    });
+
+                    function getLocation() {
+                        return $q(function (resolve, reject) {
+                            navigator.geolocation.getCurrentPosition(function (position) {
+                                resolve(position);
+                            }, function (error) {
+                                error.from = 'getLocation';
+                                reject(error);
+                            });
+                        });
+                    }
+
+                    function reverseGeocoding(location) {
+                        return $q(function (resolve, reject) {
+                            var latlng = {
+                                lat: location.coords.latitude,
+                                lng: location.coords.longitude
+                            };
+                            geocoder.geocode({'location': latlng}, function (results, status) {
+                                if (status == google.maps.GeocoderStatus.OK) {
+                                    if (results[1]) {
+                                        resolve(results[1]);
+                                    } else {
+                                        resolve(results[0])
+                                    }
+                                } else {
+                                    var error = {
+                                        status: status,
+                                        from: 'reverseGeocoding'
+                                    };
+                                    reject(error);
+                                }
+                            })
+                        });
                     }
                 }
             };
